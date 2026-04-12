@@ -96,6 +96,11 @@ class Extractor(PreTrainedModel):
         self.encoder = self._load_encoder(config.model_name, encoder_config)
 
         self.encoder.resize_token_embeddings(len(self.processor.tokenizer))
+
+        # Propagate encoder position limit to processor for sequence-length guard
+        if hasattr(self.encoder.config, 'max_position_embeddings'):
+            self.processor._max_position_embeddings = self.encoder.config.max_position_embeddings
+
         self.hidden_size = self.encoder.config.hidden_size
 
         # Span representation layer
