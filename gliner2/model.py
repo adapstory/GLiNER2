@@ -46,6 +46,7 @@ class ExtractorConfig(PretrainedConfig):
             counting_layer: str = "count_lstm",
             token_pooling: str = "first",
             max_len: int = None,
+            use_bi_encoder: bool = False,
             **kwargs
     ):
         super().__init__(**kwargs)
@@ -54,6 +55,7 @@ class ExtractorConfig(PretrainedConfig):
         self.counting_layer = counting_layer
         self.token_pooling = token_pooling
         self.max_len = max_len
+        self.use_bi_encoder = use_bi_encoder
 
 
 class Extractor(PreTrainedModel):
@@ -143,6 +145,19 @@ class Extractor(PreTrainedModel):
             )
         elif config.counting_layer == "count_lstm_v2":
             self.count_embed = CountLSTMv2(hidden_size=self.hidden_size)
+
+        # Bi-encoder layers (conditional)
+        if getattr(config, 'use_bi_encoder', False):
+            self.bi_classifier = create_mlp(
+                input_dim=self.hidden_size,
+                intermediate_dims=[self.hidden_size * 2],
+                output_dim=1,
+                dropout=0.,
+                activation="relu",
+                add_layer_norm=False,
+            )
+            self.schema_proj = nn.Linear(self.hidden_size, self.hidden_size)
+            self.text_proj = nn.Linear(self.hidden_size, self.hidden_size)
 
         # LoRA adapter state
         self._lora_layers = {}
@@ -715,15 +730,26 @@ class Extractor(PreTrainedModel):
         encoder_config = AutoConfig.from_pretrained(encoder_config_path)
 
         tokenizer = AutoTokenizer.from_pretrained(repo_or_dir)
-        model = cls(config, encoder_config=encoder_config, tokenizer=tokenizer)
 
-        # Load weights
+        # Load weights early to probe for bi-encoder keys before model creation
         try:
             model_path = download_or_local(repo_or_dir, "model.safetensors")
             state_dict = load_file(model_path)
         except Exception:
             model_path = download_or_local(repo_or_dir, "pytorch_model.bin")
             state_dict = torch.load(model_path, map_location="cpu")
+
+        # Auto-detect bi-encoder model from state_dict keys
+        if not getattr(config, 'use_bi_encoder', False):
+            has_bi_encoder_keys = any(k.startswith("bi_classifier") for k in state_dict)
+            if has_bi_encoder_keys:
+                config.use_bi_encoder = True
+                logger.info(
+                    "Detected bi-encoder state_dict keys (bi_classifier, schema_proj, text_proj). "
+                    "Setting use_bi_encoder=True."
+                )
+
+        model = cls(config, encoder_config=encoder_config, tokenizer=tokenizer)
 
         # Handle embedding size mismatch
         try:
