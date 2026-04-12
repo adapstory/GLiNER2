@@ -6,12 +6,15 @@ via DataLoader collate functions for parallel preprocessing.
 """
 
 import copy
+import logging
 import random
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple, Iterator, List, Optional
 import torch
 from transformers import AutoTokenizer
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -245,6 +248,9 @@ class SchemaTransformer:
             for t in (self.P_TOKEN, self.C_TOKEN, self.E_TOKEN, self.R_TOKEN, self.L_TOKEN)
         )
 
+        # Sequence-length guard: set by Extractor after encoder is loaded
+        self._max_position_embeddings: Optional[int] = None
+
         # OPT-6: Cache tokenized forms of special tokens and common punctuation
         self._token_cache = {}
         for tok in self.SPECIAL_TOKENS + ["(", ")", ",", "|"]:
@@ -417,6 +423,30 @@ class SchemaTransformer:
 
         # Format input
         schema_tokens_list = [r["schema_tokens"] for r in results]
+
+        # Auto-truncate text when max_len is not set and model limit is known
+        if self._max_position_embeddings and max_len is None:
+            # Count exact schema subwords using tokenizer
+            schema_subwords = sum(
+                len(self._token_cache.get(tok) or self.tokenizer.tokenize(tok))
+                for schema_tokens in schema_tokens_list
+                for tok in schema_tokens
+            )
+            # Reserve for [SEP_TEXT] and safety margin
+            available = self._max_position_embeddings - schema_subwords - 5
+            if available > 0:
+                # Conservative ratio: average word expands to ~2 subwords
+                max_text_words = int(available / 2.0)
+                if len(text_tokens) > max_text_words:
+                    # Preserve prefix tokens, truncate only text portion
+                    keep = len_prefix + max(max_text_words - len_prefix, 0)
+                    text_tokens = text_tokens[:keep]
+                    trunc_len = keep - len_prefix
+                    if start_idx_map is not None:
+                        start_idx_map = start_idx_map[:trunc_len]
+                    if end_idx_map is not None:
+                        end_idx_map = end_idx_map[:trunc_len]
+
         format_result = self._format_input_with_mapping(schema_tokens_list, text_tokens)
 
         return TransformedRecord(
@@ -443,6 +473,15 @@ class SchemaTransformer:
             return self._empty_batch()
 
         max_len = max(len(r.input_ids) for r in records)
+
+        encoder_max = self._max_position_embeddings
+        if encoder_max and max_len > encoder_max:
+            logger.warning(
+                "Sequence length %d exceeds model max_position_embeddings %d. "
+                "Results may be degraded. Use max_len parameter to truncate text.",
+                max_len, encoder_max,
+            )
+
         batch_size = len(records)
 
         # Pre-allocate tensors
