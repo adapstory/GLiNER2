@@ -48,3 +48,8 @@ local = [
 [project.urls]
 Homepage = "https://github.com/fastino-ai/GLiNER2"
 Repository = "https://github.com/fastino-ai/GLiNER2"
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests that require model download (~300MB)",
+]
