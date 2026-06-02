@@ -38,6 +38,13 @@ dependencies = [
 
 dynamic = ["version"]
 
+[project.optional-dependencies]
+local = [
+    "torch",
+    "transformers",
+    "peft",
+]
+
 [project.urls]
 Homepage = "https://github.com/fastino-ai/GLiNER2"
 Repository = "https://github.com/fastino-ai/GLiNER2"
