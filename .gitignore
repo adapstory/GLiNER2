@@ -94,4 +94,9 @@ Thumbs.db
 # Logs
 *.log
 
-test_api_client.py
+test_api_client.pytarget/
+temp/
+tmp/
+out/
+.gradle/
+node_modules/
